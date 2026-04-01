@@ -1,0 +1,20 @@
+name: DomainCraft
+version: 1.5
+main: com.foxsrv.domain.DomainCraft
+api-version: 1.20
+author: FoxSRV
+description: Domain system for custom craft in your server
+
+commands:
+  domain:
+    description: Main command for DomainCraft
+    usage: /domain <create|set|edit|delete|list>
+    aliases: [d]
+
+permissions:
+  domaincraft.admin:
+    description: Admin permission for DomainCraft
+    default: op
+  domaincraft.use:
+    description: Use permission for domains
+    default: true
