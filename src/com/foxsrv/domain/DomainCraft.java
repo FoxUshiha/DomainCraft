@@ -56,6 +56,13 @@ public class DomainCraft extends JavaPlugin implements Listener {
     private final int[] RESULT_SLOTS = {15, 16, 24, 25}; // Right square
     private final int DISPLAY_SLOT = 22; // Center
 
+    // Pagination constants
+    private final int ITEMS_PER_PAGE = 45; // slots 0-44
+    private final int PREV_PAGE_SLOT = 48;
+    private final int NEXT_PAGE_SLOT = 50;
+    private final int CLOSE_SLOT = 49;
+    private final int BACK_SLOT = 45;
+
     // ====================================================
     // ON ENABLE / DISABLE
     // ====================================================
@@ -205,6 +212,19 @@ public class DomainCraft extends JavaPlugin implements Listener {
     }
 
     // ====================================================
+    // CRAFT COST CALCULATION (for sorting)
+    // ====================================================
+    private int calculateCraftCost(Craft craft) {
+        int total = 0;
+        for (ItemStack ing : craft.getIngredients()) {
+            if (ing != null && ing.getType() != Material.AIR) {
+                total += ing.getAmount();
+            }
+        }
+        return total;
+    }
+
+    // ====================================================
     // GUI HELPERS
     // ====================================================
     private ItemStack createGuiItem(Material material, String name, String... lore) {
@@ -234,16 +254,26 @@ public class DomainCraft extends JavaPlugin implements Listener {
     // ====================================================
     // GUI BUILDERS
     // ====================================================
-    private Inventory buildDomainMenu(Player player, String domainName) {
+    private Inventory buildDomainMenu(Player player, String domainName, int page) {
         Domain domain = domains.get(domainName);
         if (domain == null) return null;
 
-        DomainInventoryHolder holder = new DomainInventoryHolder(DomainInventoryHolder.Type.DOMAIN_MENU, domainName, null, 0, player.getUniqueId());
+        // Get crafts sorted by cost (cheaper first)
+        List<Craft> crafts = new ArrayList<>(domain.getCrafts());
+        crafts.sort(Comparator.comparingInt(this::calculateCraftCost));
+
+        int totalPages = (int) Math.ceil((double) crafts.size() / ITEMS_PER_PAGE);
+        if (page < 0) page = 0;
+        if (page >= totalPages && totalPages > 0) page = totalPages - 1;
+
+        DomainInventoryHolder holder = new DomainInventoryHolder(DomainInventoryHolder.Type.DOMAIN_MENU, domainName, null, page, player.getUniqueId());
         Inventory inv = Bukkit.createInventory(holder, 54, ChatColor.DARK_BLUE + "Domain Menu: " + domainName);
 
+        int start = page * ITEMS_PER_PAGE;
+        int end = Math.min(start + ITEMS_PER_PAGE, crafts.size());
         int slot = 0;
-        for (Craft craft : domain.getCrafts()) {
-            if (slot >= 45) break;
+        for (int i = start; i < end; i++) {
+            Craft craft = crafts.get(i);
             ItemStack display = craft.getDisplayItem().clone();
             ItemMeta meta = display.getItemMeta();
             List<String> lore = new ArrayList<>(meta.hasLore() ? meta.getLore() : new ArrayList<>());
@@ -268,10 +298,29 @@ public class DomainCraft extends JavaPlugin implements Listener {
             inv.setItem(slot++, display);
         }
 
-        for (int i = 0; i < 45; i++) {
+        // Fill empty slots with glass
+        for (int i = 0; i < ITEMS_PER_PAGE; i++) {
             if (inv.getItem(i) == null) inv.setItem(i, createFillerGlass());
         }
-        inv.setItem(49, createGuiItem(Material.BARRIER, ChatColor.RED + "Close"));
+
+        // Navigation and close buttons
+        if (totalPages > 1) {
+            if (page > 0) {
+                inv.setItem(PREV_PAGE_SLOT, createGuiItem(Material.ARROW, ChatColor.GOLD + "Previous Page"));
+            } else {
+                inv.setItem(PREV_PAGE_SLOT, createFillerGlass());
+            }
+            if (page < totalPages - 1) {
+                inv.setItem(NEXT_PAGE_SLOT, createGuiItem(Material.ARROW, ChatColor.GOLD + "Next Page"));
+            } else {
+                inv.setItem(NEXT_PAGE_SLOT, createFillerGlass());
+            }
+        } else {
+            inv.setItem(PREV_PAGE_SLOT, createFillerGlass());
+            inv.setItem(NEXT_PAGE_SLOT, createFillerGlass());
+        }
+        inv.setItem(CLOSE_SLOT, createGuiItem(Material.BARRIER, ChatColor.RED + "Close"));
+
         return inv;
     }
 
@@ -314,8 +363,8 @@ public class DomainCraft extends JavaPlugin implements Listener {
 
         inv.setItem(40, createGuiItem(Material.CRAFTING_TABLE, ChatColor.GREEN + "CRAFT",
                 ChatColor.GRAY + "Click to perform the craft"));
-        inv.setItem(45, createGuiItem(Material.ARROW, ChatColor.GOLD + "Back"));
-        inv.setItem(49, createGuiItem(Material.BARRIER, ChatColor.RED + "Close"));
+        inv.setItem(BACK_SLOT, createGuiItem(Material.ARROW, ChatColor.GOLD + "Back"));
+        inv.setItem(CLOSE_SLOT, createGuiItem(Material.BARRIER, ChatColor.RED + "Close"));
 
         // Fill the rest with glass
         for (int i = 0; i < inv.getSize(); i++) {
@@ -366,8 +415,8 @@ public class DomainCraft extends JavaPlugin implements Listener {
         }
 
         inv.setItem(40, createGuiItem(Material.EMERALD_BLOCK, ChatColor.GREEN + "SAVE CRAFT"));
-        inv.setItem(45, createGuiItem(Material.ARROW, ChatColor.GOLD + "Back"));
-        inv.setItem(49, createGuiItem(Material.BARRIER, ChatColor.RED + "Close"));
+        inv.setItem(BACK_SLOT, createGuiItem(Material.ARROW, ChatColor.GOLD + "Back"));
+        inv.setItem(CLOSE_SLOT, createGuiItem(Material.BARRIER, ChatColor.RED + "Close"));
 
         // Instructions
         inv.setItem(48, createGuiItem(Material.OAK_SIGN, ChatColor.AQUA + "Instructions",
@@ -405,33 +454,62 @@ public class DomainCraft extends JavaPlugin implements Listener {
         return inv;
     }
 
-    private Inventory buildEditCraftList(Player player, String domainName) {
-        DomainInventoryHolder holder = new DomainInventoryHolder(DomainInventoryHolder.Type.EDIT_CRAFT_LIST, domainName, null, 0, player.getUniqueId());
+    private Inventory buildEditCraftList(Player player, String domainName, int page) {
+        Domain domain = domains.get(domainName);
+        if (domain == null) return null;
+
+        // Get crafts sorted by cost (cheaper first)
+        List<Craft> crafts = new ArrayList<>(domain.getCrafts());
+        crafts.sort(Comparator.comparingInt(this::calculateCraftCost));
+
+        int totalPages = (int) Math.ceil((double) crafts.size() / ITEMS_PER_PAGE);
+        if (page < 0) page = 0;
+        if (page >= totalPages && totalPages > 0) page = totalPages - 1;
+
+        DomainInventoryHolder holder = new DomainInventoryHolder(DomainInventoryHolder.Type.EDIT_CRAFT_LIST, domainName, null, page, player.getUniqueId());
         Inventory inv = Bukkit.createInventory(holder, 54, ChatColor.DARK_RED + "Edit Crafts: " + domainName);
 
-        Domain domain = domains.get(domainName);
-        if (domain != null) {
-            int slot = 0;
-            for (Craft craft : domain.getCrafts()) {
-                if (slot >= 45) break;
-                ItemStack display = craft.getDisplayItem() != null ? craft.getDisplayItem().clone() : new ItemStack(Material.PAPER);
-                ItemMeta meta = display.hasItemMeta() ? display.getItemMeta() : Bukkit.getItemFactory().getItemMeta(display.getType());
-                List<String> lore = new ArrayList<>(meta.hasLore() ? meta.getLore() : new ArrayList<>());
-                lore.add("");
-                lore.add(ChatColor.YELLOW + "Click to edit this craft");
-                meta.setLore(lore);
-                meta.getPersistentDataContainer().set(guiCraftIdKey, PersistentDataType.STRING, craft.getId());
-                meta.getPersistentDataContainer().set(isGuiItemKey, PersistentDataType.BOOLEAN, true);
-                display.setItemMeta(meta);
-                inv.setItem(slot++, display);
-            }
+        int start = page * ITEMS_PER_PAGE;
+        int end = Math.min(start + ITEMS_PER_PAGE, crafts.size());
+        int slot = 0;
+        for (int i = start; i < end; i++) {
+            Craft craft = crafts.get(i);
+            ItemStack display = craft.getDisplayItem() != null ? craft.getDisplayItem().clone() : new ItemStack(Material.PAPER);
+            ItemMeta meta = display.hasItemMeta() ? display.getItemMeta() : Bukkit.getItemFactory().getItemMeta(display.getType());
+            List<String> lore = new ArrayList<>(meta.hasLore() ? meta.getLore() : new ArrayList<>());
+            lore.add("");
+            lore.add(ChatColor.YELLOW + "Click to edit this craft");
+            meta.setLore(lore);
+            meta.getPersistentDataContainer().set(guiCraftIdKey, PersistentDataType.STRING, craft.getId());
+            meta.getPersistentDataContainer().set(isGuiItemKey, PersistentDataType.BOOLEAN, true);
+            display.setItemMeta(meta);
+            inv.setItem(slot++, display);
         }
 
-        for (int i = 0; i < 45; i++) {
+        // Fill empty slots with glass
+        for (int i = 0; i < ITEMS_PER_PAGE; i++) {
             if (inv.getItem(i) == null) inv.setItem(i, createFillerGlass());
         }
-        inv.setItem(45, createGuiItem(Material.ARROW, ChatColor.GOLD + "Back"));
-        inv.setItem(49, createGuiItem(Material.BARRIER, ChatColor.RED + "Close"));
+
+        // Navigation and back/close buttons
+        if (totalPages > 1) {
+            if (page > 0) {
+                inv.setItem(PREV_PAGE_SLOT, createGuiItem(Material.ARROW, ChatColor.GOLD + "Previous Page"));
+            } else {
+                inv.setItem(PREV_PAGE_SLOT, createFillerGlass());
+            }
+            if (page < totalPages - 1) {
+                inv.setItem(NEXT_PAGE_SLOT, createGuiItem(Material.ARROW, ChatColor.GOLD + "Next Page"));
+            } else {
+                inv.setItem(NEXT_PAGE_SLOT, createFillerGlass());
+            }
+        } else {
+            inv.setItem(PREV_PAGE_SLOT, createFillerGlass());
+            inv.setItem(NEXT_PAGE_SLOT, createFillerGlass());
+        }
+        inv.setItem(BACK_SLOT, createGuiItem(Material.ARROW, ChatColor.GOLD + "Back"));
+        inv.setItem(CLOSE_SLOT, createGuiItem(Material.BARRIER, ChatColor.RED + "Close"));
+
         return inv;
     }
 
@@ -530,7 +608,7 @@ public class DomainCraft extends JavaPlugin implements Listener {
         }
 
         event.setCancelled(true);
-        player.openInventory(buildDomainMenu(player, domain.getName()));
+        player.openInventory(buildDomainMenu(player, domain.getName(), 0));
     }
 
     @EventHandler
@@ -558,12 +636,17 @@ public class DomainCraft extends JavaPlugin implements Listener {
 
         DomainInventoryHolder.Type type = holder.getType();
         String domainName = holder.getDomainName();
+        int currentPage = holder.getPage();
 
         switch (type) {
             case DOMAIN_MENU:
-                if (slot == 49) {
+                if (slot == CLOSE_SLOT) {
                     player.closeInventory();
-                } else if (slot < 45 && clicked.hasItemMeta()) {
+                } else if (slot == PREV_PAGE_SLOT) {
+                    player.openInventory(buildDomainMenu(player, domainName, currentPage - 1));
+                } else if (slot == NEXT_PAGE_SLOT) {
+                    player.openInventory(buildDomainMenu(player, domainName, currentPage + 1));
+                } else if (slot < ITEMS_PER_PAGE && clicked.hasItemMeta()) {
                     String craftId = clicked.getItemMeta().getPersistentDataContainer().get(guiCraftIdKey, PersistentDataType.STRING);
                     if (craftId != null) {
                         Domain domain = domains.get(domainName);
@@ -582,9 +665,9 @@ public class DomainCraft extends JavaPlugin implements Listener {
                     Domain domain = domains.get(domainName);
                     Craft craft = domain != null ? domain.getCraft(craftId) : null;
                     if (craft != null) executeCraft(player, craft);
-                } else if (slot == 45) {
-                    player.openInventory(buildDomainMenu(player, domainName));
-                } else if (slot == 49) {
+                } else if (slot == BACK_SLOT) {
+                    player.openInventory(buildDomainMenu(player, domainName, 0));
+                } else if (slot == CLOSE_SLOT) {
                     player.closeInventory();
                 }
                 break;
@@ -639,10 +722,10 @@ public class DomainCraft extends JavaPlugin implements Listener {
 
                     editSessions.remove(player.getUniqueId());
                     player.openInventory(buildEditMainMenu(player, domainName));
-                } else if (slot == 45) {
+                } else if (slot == BACK_SLOT) {
                     editSessions.remove(player.getUniqueId());
                     player.openInventory(buildEditMainMenu(player, domainName));
-                } else if (slot == 49) {
+                } else if (slot == CLOSE_SLOT) {
                     editSessions.remove(player.getUniqueId());
                     player.closeInventory();
                 }
@@ -656,18 +739,22 @@ public class DomainCraft extends JavaPlugin implements Listener {
                     editSessions.put(player.getUniqueId(), new PlayerEditSession(domainName, newCraft, false));
                     player.openInventory(buildCraftEditor(player, domainName, newCraft));
                 } else if (slot == 15) { // Edit Existing Crafts
-                    player.openInventory(buildEditCraftList(player, domainName));
+                    player.openInventory(buildEditCraftList(player, domainName, 0));
                 } else if (slot == 22) {
                     player.closeInventory();
                 }
                 break;
 
             case EDIT_CRAFT_LIST:
-                if (slot == 45) {
+                if (slot == BACK_SLOT) {
                     player.openInventory(buildEditMainMenu(player, domainName));
-                } else if (slot == 49) {
+                } else if (slot == CLOSE_SLOT) {
                     player.closeInventory();
-                } else if (slot < 45 && clicked.hasItemMeta()) {
+                } else if (slot == PREV_PAGE_SLOT) {
+                    player.openInventory(buildEditCraftList(player, domainName, currentPage - 1));
+                } else if (slot == NEXT_PAGE_SLOT) {
+                    player.openInventory(buildEditCraftList(player, domainName, currentPage + 1));
+                } else if (slot < ITEMS_PER_PAGE && clicked.hasItemMeta()) {
                     String craftId = clicked.getItemMeta().getPersistentDataContainer().get(guiCraftIdKey, PersistentDataType.STRING);
                     if (craftId != null) {
                         Domain domain = domains.get(domainName);
@@ -959,12 +1046,14 @@ public class DomainCraft extends JavaPlugin implements Listener {
         private final Type type;
         private final String domainName;
         private final String craftId;
+        private final int page;
         private final UUID viewerUuid;
 
         public DomainInventoryHolder(Type type, String domainName, String craftId, int page, UUID viewerUuid) {
             this.type = type;
             this.domainName = domainName;
             this.craftId = craftId;
+            this.page = page;
             this.viewerUuid = viewerUuid;
         }
 
@@ -973,6 +1062,7 @@ public class DomainCraft extends JavaPlugin implements Listener {
         public Type getType() { return type; }
         public String getDomainName() { return domainName; }
         public String getCraftId() { return craftId; }
+        public int getPage() { return page; }
         public UUID getViewerUuid() { return viewerUuid; }
     }
 }
